@@ -1,3 +1,9 @@
+mod commands;
+mod ndocker;
+
+pub use ndocker::NdockerPlugin;
+use nu_plugin::{JsonSerializer, serve_plugin};
+
 fn main() {
-    println!("Hello, world!");
+    serve_plugin(&NdockerPlugin, JsonSerializer);
 }
