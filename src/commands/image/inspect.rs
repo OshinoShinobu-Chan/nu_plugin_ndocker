@@ -26,11 +26,6 @@ impl PluginCommand for ImageInspectCommand {
                 nu_protocol::Type::String.to_shape(),
                 "The ID or name of the image to inspect.",
             )
-            .rest(
-                "IMAGE",
-                nu_protocol::Type::String.to_shape(),
-                "The IDs or names of the images to inspect.",
-            )
     }
 
     fn description(&self) -> &str {
