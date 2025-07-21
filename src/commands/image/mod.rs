@@ -1,4 +1,10 @@
+pub mod history;
+pub mod history_type;
 pub mod images;
+
+pub use history_type::ImageHistory;
+
+use crate::commands::shorten_id;
 
 use std::any::Any;
 
@@ -53,26 +59,12 @@ impl Image {
     }
 
     pub fn base_add_id(&self, base: &mut Record, span: Span) {
-        let short_id = self
-            .id
-            .split(':')
-            .last()
-            .unwrap_or(&self.id)
-            .chars()
-            .take(12)
-            .collect::<String>();
+        let short_id = shorten_id(&self.id);
         base.insert("id".to_string(), Value::string(&short_id, span.clone()));
     }
 
     pub fn base_add_parent_id(&self, base: &mut Record, span: Span) {
-        let short_id = self
-            .parent_id
-            .split(':')
-            .last()
-            .unwrap_or(&self.id)
-            .chars()
-            .take(12)
-            .collect::<String>();
+        let short_id = shorten_id(&self.parent_id);
         base.insert(
             "parent_id".to_string(),
             Value::string(&short_id, span.clone()),

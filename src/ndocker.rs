@@ -22,7 +22,10 @@ impl NdockerPlugin {
 
 impl Plugin for NdockerPlugin {
     fn commands(&self) -> Vec<Box<dyn PluginCommand<Plugin = Self>>> {
-        vec![Box::new(image::images::ImagesCommand)]
+        vec![
+            Box::new(image::images::ImagesCommand),
+            Box::new(image::history::ImageHistoryCommand),
+        ]
     }
 
     fn version(&self) -> String {
