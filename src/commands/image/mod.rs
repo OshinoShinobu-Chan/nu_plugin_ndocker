@@ -1,6 +1,7 @@
 pub mod history;
 pub mod history_type;
 pub mod images;
+pub mod inspect;
 
 pub use history_type::ImageHistory;
 

@@ -54,6 +54,14 @@ impl PluginCommand for ImageHistoryCommand {
                 nu_protocol::LabeledError::new(format!("Failed to get image history: {e}"))
             })?;
 
+        if let Some(timeout) = plugin.timeout {
+            rt.shutdown_timeout(timeout);
+            return Err(nu_protocol::LabeledError::new(format!(
+                "Timeout: Operation time exceeded {} seconds",
+                timeout.as_secs()
+            )));
+        }
+
         let span = call.head.clone();
         let result: Vec<Value>;
         if call.has_flag("wide") == Ok(true) {

@@ -25,6 +25,7 @@ impl Plugin for NdockerPlugin {
         vec![
             Box::new(image::images::ImagesCommand),
             Box::new(image::history::ImageHistoryCommand),
+            Box::new(image::inspect::ImageInspectCommand),
         ]
     }
 
