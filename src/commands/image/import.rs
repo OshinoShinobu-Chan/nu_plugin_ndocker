@@ -1,7 +1,6 @@
 //! This module is for command `ndocker image import`
 
 use std::collections::HashMap;
-use std::io::Read;
 
 use crate::NdockerPlugin;
 use crate::commands::image::Image;
@@ -31,6 +30,7 @@ impl ImageImportCommand {
         plugin: &<ImageImportCommand as PluginCommand>::Plugin,
         current_path: &String,
         path: String,
+        create_image_options: CreateImageOptionsBuilder,
     ) -> Result<impl Stream<Item = Result<CreateImageInfo, bollard::errors::Error>>, LabeledError>
     {
         let file_stream = read_file_stream(current_path.clone(), path)
@@ -40,7 +40,7 @@ impl ImageImportCommand {
             })?;
 
         Ok(plugin.docker_socket.create_image(
-            Some(CreateImageOptionsBuilder::new().from_src("-").build()),
+            Some(create_image_options.from_src("-").build()),
             Some(body_stream(file_stream)),
             None,
         ))
@@ -49,6 +49,7 @@ impl ImageImportCommand {
     async fn import_from_stdin(
         plugin: &<ImageImportCommand as PluginCommand>::Plugin,
         input: PipelineData,
+        create_image_options: CreateImageOptionsBuilder,
     ) -> Result<impl Stream<Item = Result<CreateImageInfo, bollard::errors::Error>>, LabeledError>
     {
         if let PipelineData::ByteStream(stream, _) = input {
@@ -57,7 +58,7 @@ impl ImageImportCommand {
             })?;
             let bytes = Bytes::from_owner(bytes);
             Ok(plugin.docker_socket.create_image(
-                Some(CreateImageOptionsBuilder::new().from_src("-").build()),
+                Some(create_image_options.from_src("-").build()),
                 Some(body_full(bytes)),
                 None,
             ))
@@ -71,13 +72,114 @@ impl ImageImportCommand {
     async fn import_from_url(
         plugin: &<ImageImportCommand as PluginCommand>::Plugin,
         url: String,
+        create_image_options: CreateImageOptionsBuilder,
     ) -> Result<impl Stream<Item = Result<CreateImageInfo, bollard::errors::Error>>, LabeledError>
     {
         Ok(plugin.docker_socket.create_image(
-            Some(CreateImageOptionsBuilder::new().from_src(&url).build()),
+            Some(create_image_options.from_src(&url).build()),
             None,
             None,
         ))
+    }
+
+    fn get_import_source(file: &String, current_path: &String) -> Result<ImportSrc, LabeledError> {
+        if file == "-" {
+            Ok(ImportSrc::Stdin)
+        } else if check_url(file).is_ok() {
+            Ok(ImportSrc::Url(file.clone()))
+        } else if check_file_exists(current_path, file).is_ok() {
+            Ok(ImportSrc::File(file.clone()))
+        } else {
+            Err(nu_protocol::LabeledError::new(format!(
+                "File or URL does not exist: {}",
+                file
+            )))
+        }
+    }
+
+    fn handle_url_progress(
+        response: CreateImageInfo,
+        id: &mut String,
+        line_size: &mut usize,
+    ) {
+        *id = response.status.unwrap_or_default();
+        let progress = response.progress.unwrap_or_default();
+        let output;
+
+        if id.is_empty() && progress.is_empty() {
+            return;
+        } else if id.is_empty() {
+            output = format!("\rImporting image: {}", progress);
+        } else if progress.is_empty() {
+            if *line_size == 0 {
+                eprintln!("{}", id);
+            } else {
+                eprintln!();
+                eprintln!("{}", id);
+            }
+            return;
+        } else {
+            output = format!("\r{}: {}", id, progress);
+        }
+
+        if *line_size > 0 {
+            eprint!("\r{}", " ".repeat(*line_size));
+        }
+        *line_size = output.len();
+        eprint!("\r{}", output);
+    }
+
+    fn handle_named_params(
+        call: &nu_plugin::EvaluatedCall,   
+    ) -> HashMap<String, Value> {
+        call.named
+            .clone()
+            .into_iter()
+            .filter(|n| n.1.is_some())
+            .map(|n| (n.0.item.clone(), n.1.clone().unwrap()))
+            .collect::<HashMap<String, Value>>()
+    }
+
+    fn option_get_commit_message(
+        params: &HashMap<String, Value>, 
+        create_image_options: CreateImageOptionsBuilder
+    ) -> CreateImageOptionsBuilder{
+        let mut option = create_image_options;
+        if let Some(message) = params.get("message") {
+            let message = message.as_str().unwrap_or_default();
+            option = option.message(message);
+        }
+        option
+    }
+
+    fn option_get_platform(
+        params: &HashMap<String, Value>, 
+        create_image_options: CreateImageOptionsBuilder
+    ) -> CreateImageOptionsBuilder {
+        let mut option = create_image_options;
+        if let Some(platform) = params.get("platform") {
+            let platform = platform.as_str().unwrap_or_default();
+            option = option.platform(platform);
+        }
+        option
+    }
+
+    fn option_get_changes(
+        params: &HashMap<String, Value>, 
+        create_image_options: CreateImageOptionsBuilder
+    ) -> CreateImageOptionsBuilder {
+        let mut options = create_image_options;
+        if let Some(changes) = params.get("change") {
+            let changes = changes
+                .clone()
+                .into_list()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|v| v.into_string().unwrap_or_default())
+                .collect::<Vec<String>>();
+            options = options.changes(changes);
+        }
+        options
     }
 }
 
@@ -147,24 +249,26 @@ impl PluginCommand for ImageImportCommand {
         let current_path = engine.get_current_dir().map_err(|e| {
             nu_protocol::LabeledError::new(format!("Failed to get current directory: {e}"))
         })?;
+        let import_src = ImageImportCommand::get_import_source(&file, &current_path)?;
 
-        let import_src = if file == "-" {
-            ImportSrc::Stdin
-        } else if check_url(&file).is_ok() {
-            ImportSrc::Url(file)
-        } else if check_file_exists(&current_path, &file).is_ok() {
-            ImportSrc::File(file)
-        } else {
-            return Err(nu_protocol::LabeledError::new(format!(
-                "File or URL does not exist: {file}"
-            )));
-        };
+        let mut options = CreateImageOptionsBuilder::new();
+
+        if let Ok(repotag) = call.req::<String>(1) {
+            options = options.repo(&repotag);
+        }
+
+        let params = Self::handle_named_params(call);
+
+        options = Self::option_get_commit_message(&params, options);
+        options = Self::option_get_platform(&params, options);
+        options = Self::option_get_changes(&params, options);
 
         let mut id = String::new();
         let imported_image = rt.block_on(async {
             match import_src {
                 ImportSrc::File(path) => {
-                    let mut response_stream = Self::import_from_file(plugin, &current_path, path).await?;
+                    let mut response_stream = 
+                        Self::import_from_file(plugin, &current_path, path, options).await?;
                     while let Some(response) = response_stream.next().await {
                         let response = response.map_err(|e| {
                             nu_protocol::LabeledError::new(format!("Failed to import image from file: {e}"))
@@ -174,7 +278,8 @@ impl PluginCommand for ImageImportCommand {
                     }
                 }
                 ImportSrc::Stdin => {
-                    let mut response_stream = Self::import_from_stdin(plugin, input).await?;
+                    let mut response_stream = 
+                        Self::import_from_stdin(plugin, input, options).await?;
                     while let Some(response) = response_stream.next().await {
                         let response = response.map_err(|e| {
                             nu_protocol::LabeledError::new(format!("Failed to import image from stdin: {e}"))
@@ -184,35 +289,14 @@ impl PluginCommand for ImageImportCommand {
                     }
                 }
                 ImportSrc::Url(url) => {
-                    let mut response_stream = Self::import_from_url(plugin, url).await?;
+                    let mut response_stream = 
+                        Self::import_from_url(plugin, url, options).await?;
                     let mut line_size = 0;
                     while let Some(response) = response_stream.next().await {
                         let response = response.map_err(|e| {
                             nu_protocol::LabeledError::new(format!("Failed to import image from URL: {e}"))
                         })?;
-                        id = response.status.unwrap_or_default();
-                        let progress = response.progress.unwrap_or_default();
-                        let output;
-                        if id.is_empty() && progress.is_empty() {
-                            continue;
-                        } else if id.is_empty() {
-                            output = format!("\rImporting image: {}", progress);
-                        } else if progress.is_empty() {
-                            if line_size == 0 {
-                                eprintln!("{}", id);
-                            } else {
-                                eprintln!();
-                                eprintln!("{}", id);
-                            }
-                            continue;
-                        } else {
-                            output = format!("\r{}: {}", id, progress);
-                        }
-                        if line_size > 0 {
-                            eprint!("\r{}", " ".repeat(line_size));
-                        }
-                        line_size = output.len();
-                        eprint!("\r{}", output);
+                        Self::handle_url_progress(response, &mut id, &mut line_size);
                     }
                     eprintln!();
                 }
