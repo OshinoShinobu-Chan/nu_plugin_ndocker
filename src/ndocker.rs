@@ -26,6 +26,7 @@ impl Plugin for NdockerPlugin {
             Box::new(image::images::ImagesCommand),
             Box::new(image::history::ImageHistoryCommand),
             Box::new(image::inspect::ImageInspectCommand),
+            Box::new(image::import::ImageImportCommand),
         ]
     }
 

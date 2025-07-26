@@ -1298,13 +1298,19 @@ name = "nu_plugin_ndocker"
 version = "0.1.0"
 dependencies = [
  "bollard",
+ "bytes",
  "chrono",
+ "futures-core",
+ "futures-util",
+ "http-body",
+ "http-body-util",
  "nu-plugin",
  "nu-protocol",
  "nu-utils",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "typetag",
 ]
 
